@@ -76,6 +76,14 @@ class TransformerConfig:
             self.num_hiddens_per_head = self.embedding_dim // self.num_heads
 
 
+@chex.dataclass
+class LoopedTransformerConfig(TransformerConfig):
+    """Extended TransformerConfig with looped architecture."""
+
+    # The number of loops to apply the transformer layers.
+    num_loops: int = 1
+
+
 def layer_norm(x: chex.Array) -> chex.Array:
     return hk.LayerNorm(axis=-1, create_scale=True, create_offset=True)(x)
 
@@ -440,12 +448,6 @@ class Transformer(hk.Module):
     """Transformer (Vaswani et al., 2017)."""
 
     def __init__(self, config: TransformerConfig, name: Optional[str] = None):
-        """Initializes the Transformer.
-
-        Args:
-          config: The hyperparameters used in Transformer architectures.
-          name: The name of the module.
-        """
         super().__init__(name=name)
         shared_embeddings_fn = None
 
@@ -461,7 +463,112 @@ class Transformer(hk.Module):
         self._decoder = TransformerDecoder(config, shared_embeddings_fn)
 
     def __call__(self, inputs: chex.Array, targets: chex.Array) -> chex.Array:
+        for _ in range(num_loops):
+            output = self._encoder(inputs)
+            # inputs = self._decoder(output, targets)
+            inputs = output
+
         return self._decoder(self._encoder(inputs), targets)
+
+
+class LoopedTransformer(hk.Module):
+    """Transformer Encoder (Vaswani et al., 2017)."""
+
+    def __init__(
+        self,
+        config: LoopedTransformerConfig,
+        shared_embeddings_fn: Optional[Callable[[chex.Array], chex.Array]] = None,
+        name: Optional[str] = None,
+    ) -> None:
+        """Initializes the transformer encoder.
+
+        Args:
+          config: The hyperparameters used in Transformer architectures.
+          shared_embeddings_fn: Embedding function that is shared with the decoder.
+          name: The name of the module.
+        """
+        super().__init__(name=name)
+        self._config = config
+        self._shared_embeddings_fn = shared_embeddings_fn
+
+    def __call__(self, x: jnp.ndarray) -> chex.Array:
+        """Returns the transformer encoder output, shape [B, T, E]."""
+        if self._config.use_embeddings:
+            if self._shared_embeddings_fn is not None:
+                embeddings = self._shared_embeddings_fn(x)
+            else:
+                # Since `x` is one-hot encoded, using hk.Linear is equivalent to
+                # hk.Embed with hk.EmbedLookupStyle.ONE_HOT.
+                embs_init = hk.initializers.TruncatedNormal(
+                    stddev=self._config.emb_init_scale
+                )
+                embeddings = hk.Linear(
+                    self._config.embedding_dim, with_bias=False, w_init=embs_init
+                )(x)
+
+            embeddings *= jnp.sqrt(self._config.embedding_dim)
+
+        else:
+            embeddings = x
+
+        batch_size, sequence_length, embedding_size = embeddings.shape
+
+        pos_enc_params = self._config.positional_encodings_params
+        if (
+            self._config.positional_encodings
+            == pos_encs_lib.PositionalEncodings.SIN_COS
+        ):
+            pos_encodings = pos_encs_lib.sinusoid_position_encoding(
+                sequence_length=sequence_length,
+                hidden_size=embedding_size,
+                memory_length=0,
+                max_timescale=pos_enc_params.max_time,
+                min_timescale=2,
+                clamp_length=0,
+                causal=True,
+            )
+            h = embeddings + pos_encodings
+            h = hk.dropout(hk.next_rng_key(), self._config.dropout_prob, h)
+        else:
+            h = embeddings
+
+        # The causal mask is shared across heads.
+        if self._config.causal_masking:
+            causal_mask = jnp.tril(
+                jnp.ones((batch_size, 1, sequence_length, sequence_length))
+            )
+        else:
+            causal_mask = None
+
+        for _ in range(self._config.num_loops):
+            for _ in range(self._config.num_layers):
+                attention = MultiHeadDotProductAttention(
+                    num_heads=self._config.num_heads,
+                    num_hiddens_per_head=self._config.num_hiddens_per_head,
+                    positional_encodings=self._config.positional_encodings,
+                    positional_encodings_params=pos_enc_params,
+                    attention_window=self._config.attention_window,
+                )(
+                    inputs_q=h,
+                    inputs_kv=h,
+                    mask=causal_mask,
+                    causal=self._config.causal_masking,
+                )
+                attention = hk.dropout(
+                    hk.next_rng_key(), self._config.dropout_prob, attention
+                )
+                attention = layer_norm(h + attention)
+
+                # Position-wise feedforward network.
+                h = hk.Linear(
+                    self._config.embedding_dim * self._config.widening_factor
+                )(attention)
+                h = jnn.relu(h)
+                h = hk.Linear(self._config.embedding_dim)(h)
+
+                h = hk.dropout(hk.next_rng_key(), self._config.dropout_prob, h)
+                h = layer_norm(h + attention)
+        return h
 
 
 def make_transformer_encoder(
@@ -590,9 +697,10 @@ def make_looped_transformer(
         positional_encodings_params = pos_encs_lib.SinCosParams()
     elif positional_encodings_params is None:
         raise ValueError("No parameters for positional encodings are passed.")
-    config = TransformerConfig(
+    config = LoopedTransformerConfig(
         output_size=output_size,
         embedding_dim=embedding_dim,
+        num_loops=num_loops,
         num_layers=num_layers,
         num_heads=num_heads,
         num_hiddens_per_head=num_hiddens_per_head,
@@ -608,9 +716,7 @@ def make_looped_transformer(
     )
 
     def looped_transformer(inputs: chex.Array) -> chex.Array:
-        for _ in range(num_loops):
-            output = TransformerEncoder(config)(inputs)
-            inputs = output
+        output = LoopedTransformer(config)(inputs)
         if not return_all_outputs:
             output = output[:, -1, :]
         return hk.Linear(output_size)(output)
