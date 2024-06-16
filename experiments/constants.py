@@ -64,6 +64,8 @@ MODEL_BUILDERS = {
         transformer.make_transformer_encoder,
     'transformer':
         transformer.make_transformer,
+    'looped_transformer':
+        transformer.make_looped_transformer,
     'tape_rnn':
         functools.partial(
             rnn.make_rnn,

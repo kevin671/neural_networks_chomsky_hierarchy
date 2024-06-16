@@ -45,7 +45,8 @@ _TASK = flags.DEFINE_string(
 )
 _ARCHITECTURE = flags.DEFINE_string(
     'architecture',
-    default='tape_rnn',
+    default='looped_transformer',
+    # default='transformer_encoder',
     help='Model architecture (see `constants.py` for other architectures).',
 )
 
@@ -65,12 +66,16 @@ _COMPUTATION_STEPS_MULT = flags.DEFINE_integer(
 )
 # The architecture parameters depend on the architecture, so we cannot define
 # them as via flags. See `constants.py` for the required values.
-_ARCHITECTURE_PARAMS = {
-    'hidden_size': 256,
-    'memory_cell_size': 8,
-    'memory_size': 40,
-}
+#_ARCHITECTURE_PARAMS = {
+#    'hidden_size': 256,
+#    'memory_cell_size': 8,
+#    'memory_size': 40,
+#}
 
+_ARCHITECTURE_PARAMS = {
+    'embedding_dim': 64,
+    #'num_layers': 5,
+}
 
 def main(unused_argv) -> None:
   # Create the task.
