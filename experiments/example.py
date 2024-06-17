@@ -45,8 +45,8 @@ _TASK = flags.DEFINE_string(
 )
 _ARCHITECTURE = flags.DEFINE_string(
     'architecture',
-    default='looped_transformer',
-    # default='transformer_encoder',
+    # default='looped_transformer',
+    default='transformer_encoder',
     help='Model architecture (see `constants.py` for other architectures).',
 )
 
@@ -74,7 +74,8 @@ _COMPUTATION_STEPS_MULT = flags.DEFINE_integer(
 
 _ARCHITECTURE_PARAMS = {
     'embedding_dim': 64,
-    #'num_layers': 5,
+    'num_layers': 5,
+    #'positional_encodings': 'RELATIVE',
 }
 
 def main(unused_argv) -> None:
@@ -116,14 +117,14 @@ def main(unused_argv) -> None:
   training_params = training.ClassicTrainingParams(
       seed=0,
       model_init_seed=0,
-      training_steps=10_000,
+      training_steps=1000000,
       log_frequency=100,
       length_curriculum=curriculum,
       batch_size=_BATCH_SIZE.value,
       task=task,
       model=model,
       loss_fn=loss_fn,
-      learning_rate=1e-3,
+      learning_rate= 0.0005,
       accuracy_fn=accuracy_fn,
       compute_full_range_test=True,
       max_range_test_length=100,
@@ -131,6 +132,8 @@ def main(unused_argv) -> None:
       range_test_sub_batch_size=64,
       is_autoregressive=_IS_AUTOREGRESSIVE.value,
   )
+
+  print(training_params)
 
   training_worker = training.TrainingWorker(training_params, use_tqdm=True)
   _, eval_results, _ = training_worker.run()
