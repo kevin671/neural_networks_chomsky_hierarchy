@@ -448,6 +448,12 @@ class Transformer(hk.Module):
     """Transformer (Vaswani et al., 2017)."""
 
     def __init__(self, config: TransformerConfig, name: Optional[str] = None):
+        """Initializes the Transformer.
+
+        Args:
+          config: The hyperparameters used in Transformer architectures.
+          name: The name of the module.
+        """
         super().__init__(name=name)
         shared_embeddings_fn = None
 
@@ -463,11 +469,6 @@ class Transformer(hk.Module):
         self._decoder = TransformerDecoder(config, shared_embeddings_fn)
 
     def __call__(self, inputs: chex.Array, targets: chex.Array) -> chex.Array:
-        for _ in range(num_loops):
-            output = self._encoder(inputs)
-            # inputs = self._decoder(output, targets)
-            inputs = output
-
         return self._decoder(self._encoder(inputs), targets)
 
 
